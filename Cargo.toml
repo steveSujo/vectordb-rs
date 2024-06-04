@@ -13,7 +13,11 @@ sha2 = "0.10"
 rand = "0.8"
 proptest = "1.0"
 quickcheck = "1.0"
-darray = "0.15"
+ndarray = "0.15"
+aes-gcm = "0.10"
+argon2 = "0.5"
+rayon = "1.8"
+bytemuck = { version = "1.14", features = ["derive"] }
 
 [dev-dependencies]
 criterion = "0.4"
