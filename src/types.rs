@@ -1,6 +1,5 @@
 use serde::{Serialize, Deserialize};
 use crate::error::VdbError;
-
 use rayon::prelude::*;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -12,6 +11,11 @@ impl Vector {
     pub fn new(data: Vec<f32>) -> Result<Self, VdbError> {
         if data.is_empty() {
             return Err(VdbError::InvalidParameter("Vector cannot be empty".to_string()));
+        }
+        for &val in &data {
+            if val.is_nan() || val.is_infinite() {
+                return Err(VdbError::InvalidParameter("Vector contains NaN or Infinite value".to_string()));
+            }
         }
         Ok(Self { data })
     }
@@ -40,14 +44,33 @@ pub fn l2_distance(a: &[f32], b: &[f32]) -> Result<f32, VdbError> {
     if a.len() != b.len() {
         return Err(VdbError::DimensionMismatch { expected: a.len(), found: b.len() });
     }
-    let sum: f32 = a.par_iter()
-        .zip(b.par_iter())
+    
+    // Unrolled chunk iteration for better auto-vectorization
+    let chunks_a = a.chunks_exact(4);
+    let chunks_b = b.chunks_exact(4);
+    let remainder_a = chunks_a.remainder();
+    let remainder_b = chunks_b.remainder();
+
+    let sum_chunks: f32 = chunks_a.zip(chunks_b)
+        .par_bridge()
+        .map(|(chunk_a, chunk_b)| {
+            let d0 = chunk_a[0] - chunk_b[0];
+            let d1 = chunk_a[1] - chunk_b[1];
+            let d2 = chunk_a[2] - chunk_b[2];
+            let d3 = chunk_a[3] - chunk_b[3];
+            d0 * d0 + d1 * d1 + d2 * d2 + d3 * d3
+        })
+        .sum();
+
+    let sum_remainder: f32 = remainder_a.iter()
+        .zip(remainder_b.iter())
         .map(|(x, y)| {
             let diff = x - y;
             diff * diff
         })
         .sum();
-    Ok(sum.sqrt())
+
+    Ok((sum_chunks + sum_remainder).sqrt())
 }
 
 pub fn cosine_similarity(a: &[f32], b: &[f32]) -> Result<f32, VdbError> {
@@ -80,7 +103,7 @@ pub fn quantize_sq8(vector: &[f32]) -> QuantizedVector {
     }
 
     let range = max_val - min_val;
-    let data = if range == 0.0 {
+    let data = if range == 0.0 || range.is_nan() {
         vec![0u8; vector.len()]
     } else {
         vector.iter().map(|&val| {

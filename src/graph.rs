@@ -50,7 +50,6 @@ impl Eq for Candidate {}
 
 impl Ord for Candidate {
     fn cmp(&self, other: &Self) -> Ordering {
-        // Reverse order for MinHeap in BinaryHeap (we want smallest distance at top)
         other.distance.partial_cmp(&self.distance).unwrap_or(Ordering::Equal)
             .then_with(|| other.id.cmp(&self.id))
     }
@@ -84,8 +83,29 @@ impl HnswGraph {
         match metric {
             DistanceMetric::L2 => l2_distance(a, b),
             DistanceMetric::Cosine => Ok(1.0 - cosine_similarity(a, b)?),
-            DistanceMetric::DotProduct => Ok(-dot_product(a, b)?), // minimize negative dot product
+            DistanceMetric::DotProduct => Ok(-dot_product(a, b)?),
         }
+    }
+
+    pub fn verify_link_consistency(&self) -> bool {
+        for (&u_id, u_node) in &self.nodes {
+            for (level, neighbors) in u_node.neighbors.iter().enumerate() {
+                for &v_id in neighbors {
+                    if let Some(v_node) = self.nodes.get(&v_id) {
+                        if level < v_node.neighbors.len() {
+                            if !v_node.neighbors[level].contains(&u_id) {
+                                return false;
+                            }
+                        } else {
+                            return false;
+                        }
+                    } else {
+                        return false;
+                    }
+                }
+            }
+        }
+        true
     }
 
     pub fn insert(&mut self, id: u64, vector: Vec<f32>, metric: DistanceMetric) -> Result<(), VdbError> {
@@ -99,9 +119,8 @@ impl HnswGraph {
         if let Some(ep) = self.entry_point {
             let mut curr_obj = ep;
             let mut curr_dist = self.distance(&vector, &self.nodes[&curr_obj].vector, metric)?;
-            let mut max_L = self.max_level;
+            let max_L = self.max_level;
 
-            // Phase 1: Traverse from top level down to level + 1
             if max_L > level {
                 let mut current_level = max_L;
                 while current_level > level {
@@ -127,23 +146,58 @@ impl HnswGraph {
                 }
             }
 
-            // Phase 2: Insert at level down to 0
             let insert_level = std::cmp::min(level, max_L);
             let mut current_level = insert_level;
             loop {
                 let W = self.search_layer(&vector, &[curr_obj], self.config.ef_construction, current_level, metric)?;
-                // Connect neighbors
                 let m_max = if current_level == 0 { self.config.m0 } else { self.config.m };
                 let selected_neighbors: Vec<u64> = W.iter().take(m_max).map(|c| c.id).collect();
                 
                 neighbors[current_level] = selected_neighbors.clone();
 
-                // Add bidirectional links
                 for &n_id in &selected_neighbors {
+                    let mut should_prune = false;
                     if let Some(n_node) = self.nodes.get_mut(&n_id) {
                         if current_level < n_node.neighbors.len() {
-                            n_node.neighbors[current_level].push(id);
+                            if !n_node.neighbors[current_level].contains(&id) {
+                                n_node.neighbors[current_level].push(id);
+                            }
+                            if n_node.neighbors[current_level].len() > m_max {
+                                should_prune = true;
+                            }
                         }
+                    }
+
+                    if should_prune {
+                        let query_v = self.nodes[&n_id].vector.clone();
+                        let mut n_list = std::mem::take(&mut self.nodes.get_mut(&n_id).unwrap().neighbors[current_level]);
+                        let neighbor_vectors: Vec<(u64, Vec<f32>)> = n_list.iter()
+                            .map(|&nid| {
+                                let v = if nid == id {
+                                    vector.clone()
+                                } else {
+                                    self.nodes[&nid].vector.clone()
+                                };
+                                (nid, v)
+                            })
+                            .collect();
+                        n_list.sort_by(|a, b| {
+                            let va = &neighbor_vectors.iter().find(|x| x.0 == *a).unwrap().1;
+                            let vb = &neighbor_vectors.iter().find(|x| x.0 == *b).unwrap().1;
+                            let da = match metric {
+                                DistanceMetric::L2 => l2_distance(&query_v, va).unwrap_or(0.0),
+                                DistanceMetric::Cosine => 1.0 - cosine_similarity(&query_v, va).unwrap_or(0.0),
+                                DistanceMetric::DotProduct => -dot_product(&query_v, va).unwrap_or(0.0),
+                            };
+                            let db = match metric {
+                                DistanceMetric::L2 => l2_distance(&query_v, vb).unwrap_or(0.0),
+                                DistanceMetric::Cosine => 1.0 - cosine_similarity(&query_v, vb).unwrap_or(0.0),
+                                DistanceMetric::DotProduct => -dot_product(&query_v, vb).unwrap_or(0.0),
+                            };
+                            da.partial_cmp(&db).unwrap_or(Ordering::Equal)
+                        });
+                        n_list.truncate(m_max);
+                        self.nodes.get_mut(&n_id).unwrap().neighbors[current_level] = n_list;
                     }
                 }
 
@@ -184,7 +238,6 @@ impl HnswGraph {
         let mut curr_dist = self.distance(query, &self.nodes[&curr_obj].vector, metric)?;
         let max_L = self.max_level;
 
-        // Traverse down from top level to level 1
         let mut current_level = max_L;
         while current_level > 0 {
             let mut changed = false;
@@ -215,9 +268,9 @@ impl HnswGraph {
     }
 
     fn search_layer(&self, query: &[f32], enter_points: &[u64], ef: usize, level: usize, metric: DistanceMetric) -> Result<Vec<Candidate>, VdbError> {
-        let mut visited = HashSet::new();
-        let mut v = BinaryHeap::new(); // Candidates (min-heap by distance)
-        let mut C = BinaryHeap::new(); // Farthest results (max-heap)
+        let mut visited = HashSet::with_capacity(ef * 2);
+        let mut v = BinaryHeap::with_capacity(ef);
+        let mut C = BinaryHeap::with_capacity(ef);
 
         for &ep in enter_points {
             visited.insert(ep);
@@ -250,22 +303,16 @@ impl HnswGraph {
                                     v.push(candidate.clone());
                                     C.push(candidate);
                                     if C.len() > ef {
-                                        // Remove farthest element (max element in max-heap)
-                                        // BinaryHeap pops max by default, but we need max-heap for farthest.
-                                        // To simplify, collect into Vec, sort, truncate to ef.
+                                        let mut vec_c: Vec<Candidate> = C.into_vec();
+                                        vec_c.sort_by(|a, b| b.distance.partial_cmp(&a.distance).unwrap_or(Ordering::Equal));
+                                        vec_c.truncate(ef);
+                                        C = BinaryHeap::from(vec_c);
                                     }
                                 }
                             }
                         }
                     }
                 }
-            }
-
-            if C.len() > ef {
-                let mut vec_c: Vec<Candidate> = C.into_vec();
-                vec_c.sort_by(|a, b| b.distance.partial_cmp(&a.distance).unwrap_or(Ordering::Equal));
-                vec_c.truncate(ef);
-                C = BinaryHeap::from(vec_c);
             }
         }
 

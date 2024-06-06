@@ -6,6 +6,7 @@ use crate::crypto::{derive_key, encrypt_payload, decrypt_payload, compute_checks
 use std::path::{Path, PathBuf};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
+use std::collections::HashMap;
 use rand::RngCore;
 
 pub type DatabaseError = VdbError;
@@ -41,6 +42,46 @@ pub struct VectorDatabase {
     metric: DistanceMetric,
 }
 
+pub struct Transaction<'a> {
+    db: &'a mut VectorDatabase,
+    staged_nodes: HashMap<u64, Vec<f32>>,
+    committed: bool,
+}
+
+impl<'a> Transaction<'a> {
+    pub fn insert(&mut self, id: u64, vector: Vector) -> Result<(), VdbError> {
+        if self.db.graph.nodes.contains_key(&id) || self.staged_nodes.contains_key(&id) {
+            return Err(VdbError::DuplicateId(id));
+        }
+        self.staged_nodes.insert(id, vector.data);
+        Ok(())
+    }
+
+    pub fn commit(mut self) -> Result<(), VdbError> {
+        let nodes = std::mem::take(&mut self.staged_nodes);
+        for (id, vector) in nodes {
+            self.db.graph.insert(id, vector, self.db.metric)?;
+        }
+        self.db.flush()?;
+        self.committed = true;
+        Ok(())
+    }
+
+    pub fn rollback(mut self) {
+        self.staged_nodes.clear();
+        self.committed = true; // marked committed/aborted so Drop doesn't panic
+    }
+}
+
+impl<'a> Drop for Transaction<'a> {
+    fn drop(&mut self) {
+        if !self.committed {
+            // Auto rollback on drop if not explicitly committed
+            self.staged_nodes.clear();
+        }
+    }
+}
+
 impl VectorDatabase {
     pub fn open(path: impl AsRef<Path>, key: Option<[u8; 32]>) -> Result<Self, VdbError> {
         let path = path.as_ref().to_path_buf();
@@ -57,6 +98,9 @@ impl VectorDatabase {
             db.flush()?;
             return Ok(db);
         }
+
+        // Validate via memmap2 if possible
+        Self::validate_file_mmap(&path)?;
 
         let mut file = File::open(&path)
             .map_err(|e| VdbError::Io(e.to_string()))?;
@@ -109,6 +153,38 @@ impl VectorDatabase {
             graph: payload.graph,
             metric: DistanceMetric::L2,
         })
+    }
+
+    pub fn validate_file_mmap(path: &Path) -> Result<bool, VdbError> {
+        let file = File::open(path).map_err(|e| VdbError::Io(e.to_string()))?;
+        let metadata = file.metadata().map_err(|e| VdbError::Io(e.to_string()))?;
+        if metadata.len() == 0 {
+            return Ok(true);
+        }
+        let mmap = unsafe { memmap2::Mmap::map(&file) };
+        match mmap {
+            Ok(map) => {
+                if map.len() < 8 {
+                    return Err(VdbError::Serialization("File too short for header".to_string()));
+                }
+                if &map[0..8] != b"VDB_DATA" {
+                    return Err(VdbError::Serialization("Invalid magic bytes in mmap".to_string()));
+                }
+                Ok(true)
+            }
+            Err(_) => {
+                // Graceful fallback if memmap fails
+                Ok(false)
+            }
+        }
+    }
+
+    pub fn begin(&mut self) -> Transaction<'_> {
+        Transaction {
+            db: self,
+            staged_nodes: HashMap::new(),
+            committed: false,
+        }
     }
 
     pub fn create_encrypted(path: impl AsRef<Path>, passphrase: &str) -> Result<Self, VdbError> {
