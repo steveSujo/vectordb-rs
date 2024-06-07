@@ -50,7 +50,7 @@ impl Eq for Candidate {}
 
 impl Ord for Candidate {
     fn cmp(&self, other: &Self) -> Ordering {
-        other.distance.partial_cmp(&self.distance).unwrap_or(Ordering::Equal)
+        other.distance.total_cmp(&self.distance)
             .then_with(|| other.id.cmp(&self.id))
     }
 }
@@ -194,7 +194,7 @@ impl HnswGraph {
                                 DistanceMetric::Cosine => 1.0 - cosine_similarity(&query_v, vb).unwrap_or(0.0),
                                 DistanceMetric::DotProduct => -dot_product(&query_v, vb).unwrap_or(0.0),
                             };
-                            da.partial_cmp(&db).unwrap_or(Ordering::Equal)
+                            da.total_cmp(&db).then_with(|| a.cmp(b))
                         });
                         n_list.truncate(m_max);
                         self.nodes.get_mut(&n_id).unwrap().neighbors[current_level] = n_list;
@@ -263,7 +263,7 @@ impl HnswGraph {
 
         let W = self.search_layer(query, &[curr_obj], std::cmp::max(k, self.config.ef_search), 0, metric)?;
         let mut results: Vec<(u64, f32)> = W.into_iter().take(k).map(|c| (c.id, c.distance)).collect();
-        results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal));
+        results.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
         Ok(results)
     }
 
@@ -304,7 +304,7 @@ impl HnswGraph {
                                     C.push(candidate);
                                     if C.len() > ef {
                                         let mut vec_c: Vec<Candidate> = C.into_vec();
-                                        vec_c.sort_by(|a, b| b.distance.partial_cmp(&a.distance).unwrap_or(Ordering::Equal));
+                                        vec_c.sort_by(|a, b| b.distance.total_cmp(&a.distance).then_with(|| b.id.cmp(&a.id)));
                                         vec_c.truncate(ef);
                                         C = BinaryHeap::from(vec_c);
                                     }
@@ -317,7 +317,7 @@ impl HnswGraph {
         }
 
         let mut res: Vec<Candidate> = C.into_vec();
-        res.sort_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap_or(Ordering::Equal));
+        res.sort_by(|a, b| a.distance.total_cmp(&b.distance).then_with(|| a.id.cmp(&b.id)));
         Ok(res)
     }
 

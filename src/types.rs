@@ -1,6 +1,5 @@
 use serde::{Serialize, Deserialize};
 use crate::error::VdbError;
-use rayon::prelude::*;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Vector {
@@ -45,14 +44,13 @@ pub fn l2_distance(a: &[f32], b: &[f32]) -> Result<f32, VdbError> {
         return Err(VdbError::DimensionMismatch { expected: a.len(), found: b.len() });
     }
     
-    // Unrolled chunk iteration for better auto-vectorization
+    // Deterministic unrolled chunk iteration
     let chunks_a = a.chunks_exact(4);
     let chunks_b = b.chunks_exact(4);
     let remainder_a = chunks_a.remainder();
     let remainder_b = chunks_b.remainder();
 
     let sum_chunks: f32 = chunks_a.zip(chunks_b)
-        .par_bridge()
         .map(|(chunk_a, chunk_b)| {
             let d0 = chunk_a[0] - chunk_b[0];
             let d1 = chunk_a[1] - chunk_b[1];
@@ -77,9 +75,9 @@ pub fn cosine_similarity(a: &[f32], b: &[f32]) -> Result<f32, VdbError> {
     if a.len() != b.len() {
         return Err(VdbError::DimensionMismatch { expected: a.len(), found: b.len() });
     }
-    let dot: f32 = a.par_iter().zip(b.par_iter()).map(|(x, y)| x * y).sum();
-    let norm_a: f32 = a.par_iter().map(|x| x * x).sum::<f32>().sqrt();
-    let norm_b: f32 = b.par_iter().map(|x| x * x).sum::<f32>().sqrt();
+    let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
+    let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+    let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
     if norm_a == 0.0 || norm_b == 0.0 {
         return Ok(0.0);
     }
@@ -90,7 +88,7 @@ pub fn dot_product(a: &[f32], b: &[f32]) -> Result<f32, VdbError> {
     if a.len() != b.len() {
         return Err(VdbError::DimensionMismatch { expected: a.len(), found: b.len() });
     }
-    let dot: f32 = a.par_iter().zip(b.par_iter()).map(|(x, y)| x * y).sum();
+    let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
     Ok(dot)
 }
 
