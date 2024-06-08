@@ -170,34 +170,26 @@ impl HnswGraph {
 
                     if should_prune {
                         let query_v = self.nodes[&n_id].vector.clone();
-                        let mut n_list = std::mem::take(&mut self.nodes.get_mut(&n_id).unwrap().neighbors[current_level]);
-                        let neighbor_vectors: Vec<(u64, Vec<f32>)> = n_list.iter()
+                        let n_list = std::mem::take(&mut self.nodes.get_mut(&n_id).unwrap().neighbors[current_level]);
+                        let mut neighbor_distances: Vec<(u64, f32)> = n_list.iter()
                             .map(|&nid| {
                                 let v = if nid == id {
-                                    vector.clone()
+                                    &vector
                                 } else {
-                                    self.nodes[&nid].vector.clone()
+                                    &self.nodes[&nid].vector
                                 };
-                                (nid, v)
+                                let d = match metric {
+                                    DistanceMetric::L2 => l2_distance(&query_v, v).unwrap_or(0.0),
+                                    DistanceMetric::Cosine => 1.0 - cosine_similarity(&query_v, v).unwrap_or(0.0),
+                                    DistanceMetric::DotProduct => -dot_product(&query_v, v).unwrap_or(0.0),
+                                };
+                                (nid, d)
                             })
                             .collect();
-                        n_list.sort_by(|a, b| {
-                            let va = &neighbor_vectors.iter().find(|x| x.0 == *a).unwrap().1;
-                            let vb = &neighbor_vectors.iter().find(|x| x.0 == *b).unwrap().1;
-                            let da = match metric {
-                                DistanceMetric::L2 => l2_distance(&query_v, va).unwrap_or(0.0),
-                                DistanceMetric::Cosine => 1.0 - cosine_similarity(&query_v, va).unwrap_or(0.0),
-                                DistanceMetric::DotProduct => -dot_product(&query_v, va).unwrap_or(0.0),
-                            };
-                            let db = match metric {
-                                DistanceMetric::L2 => l2_distance(&query_v, vb).unwrap_or(0.0),
-                                DistanceMetric::Cosine => 1.0 - cosine_similarity(&query_v, vb).unwrap_or(0.0),
-                                DistanceMetric::DotProduct => -dot_product(&query_v, vb).unwrap_or(0.0),
-                            };
-                            da.total_cmp(&db).then_with(|| a.cmp(b))
-                        });
-                        n_list.truncate(m_max);
-                        self.nodes.get_mut(&n_id).unwrap().neighbors[current_level] = n_list;
+                        neighbor_distances.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+                        let mut sorted_list: Vec<u64> = neighbor_distances.into_iter().map(|(nid, _)| nid).collect();
+                        sorted_list.truncate(m_max);
+                        self.nodes.get_mut(&n_id).unwrap().neighbors[current_level] = sorted_list;
                     }
                 }
 
