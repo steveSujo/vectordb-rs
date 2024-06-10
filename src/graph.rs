@@ -119,48 +119,53 @@ impl HnswGraph {
         if let Some(ep) = self.entry_point {
             let mut curr_obj = ep;
             let mut curr_dist = self.distance(&vector, &self.nodes[&curr_obj].vector, metric)?;
-            let max_L = self.max_level;
+            let max_l = self.max_level;
 
-            if max_L > level {
-                let mut current_level = max_L;
+            if max_l > level {
+                let mut current_level = max_l;
                 while current_level > level {
-                    let mut changed = false;
-                    if let Some(node) = self.nodes.get(&curr_obj) {
-                        if current_level < node.neighbors.len() {
-                            for &neighbor in &node.neighbors[current_level] {
-                                if let Some(n_node) = self.nodes.get(&neighbor) {
-                                    let d = self.distance(&vector, &n_node.vector, metric)?;
-                                    if d < curr_dist {
-                                        curr_dist = d;
-                                        curr_obj = neighbor;
-                                        changed = true;
+                    let mut changed = true;
+                    while changed {
+                        changed = false;
+                        if let Some(node) = self.nodes.get(&curr_obj) {
+                            if current_level < node.neighbors.len() {
+                                for &neighbor in &node.neighbors[current_level] {
+                                    if let Some(n_node) = self.nodes.get(&neighbor) {
+                                        let d = self.distance(&vector, &n_node.vector, metric)?;
+                                        if d < curr_dist {
+                                            curr_dist = d;
+                                            curr_obj = neighbor;
+                                            changed = true;
+                                        }
                                     }
                                 }
                             }
                         }
                     }
-                    if !changed {
+                    if current_level == 0 {
                         break;
                     }
                     current_level -= 1;
                 }
             }
 
-            let insert_level = std::cmp::min(level, max_L);
+            let insert_level = std::cmp::min(level, max_l);
             let mut current_level = insert_level;
             loop {
-                let W = self.search_layer(&vector, &[curr_obj], self.config.ef_construction, current_level, metric)?;
+                let w = self.search_layer(&vector, &[curr_obj], self.config.ef_construction, current_level, metric)?;
                 let m_max = if current_level == 0 { self.config.m0 } else { self.config.m };
-                let selected_neighbors: Vec<u64> = W.iter().take(m_max).map(|c| c.id).collect();
+                let selected_neighbors: Vec<u64> = w.iter().take(m_max).map(|c| c.id).collect();
                 
                 neighbors[current_level] = selected_neighbors.clone();
 
                 for &n_id in &selected_neighbors {
                     let mut should_prune = false;
+                    let mut newly_added = false;
                     if let Some(n_node) = self.nodes.get_mut(&n_id) {
                         if current_level < n_node.neighbors.len() {
                             if !n_node.neighbors[current_level].contains(&id) {
                                 n_node.neighbors[current_level].push(id);
+                                newly_added = true;
                             }
                             if n_node.neighbors[current_level].len() > m_max {
                                 should_prune = true;
@@ -189,11 +194,17 @@ impl HnswGraph {
                         neighbor_distances.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
                         let mut sorted_list: Vec<u64> = neighbor_distances.into_iter().map(|(nid, _)| nid).collect();
                         sorted_list.truncate(m_max);
+                        if newly_added && !sorted_list.contains(&id) {
+                            if sorted_list.len() >= m_max {
+                                sorted_list.pop();
+                            }
+                            sorted_list.push(id);
+                        }
                         self.nodes.get_mut(&n_id).unwrap().neighbors[current_level] = sorted_list;
                     }
                 }
 
-                curr_obj = W.first().map(|c| c.id).unwrap_or(curr_obj);
+                curr_obj = w.first().map(|c| c.id).unwrap_or(curr_obj);
 
                 if current_level == 0 {
                     break;
@@ -201,7 +212,7 @@ impl HnswGraph {
                 current_level -= 1;
             }
 
-            if level > max_L {
+            if level > max_l {
                 self.max_level = level;
                 self.entry_point = Some(id);
             }
@@ -228,33 +239,33 @@ impl HnswGraph {
 
         let mut curr_obj = ep;
         let mut curr_dist = self.distance(query, &self.nodes[&curr_obj].vector, metric)?;
-        let max_L = self.max_level;
+        let max_l = self.max_level;
 
-        let mut current_level = max_L;
+        let mut current_level = max_l;
         while current_level > 0 {
-            let mut changed = false;
-            if let Some(node) = self.nodes.get(&curr_obj) {
-                if current_level < node.neighbors.len() {
-                    for &neighbor in &node.neighbors[current_level] {
-                        if let Some(n_node) = self.nodes.get(&neighbor) {
-                            let d = self.distance(query, &n_node.vector, metric)?;
-                            if d < curr_dist {
-                                curr_dist = d;
-                                curr_obj = neighbor;
-                                changed = true;
+            let mut changed = true;
+            while changed {
+                changed = false;
+                if let Some(node) = self.nodes.get(&curr_obj) {
+                    if current_level < node.neighbors.len() {
+                        for &neighbor in &node.neighbors[current_level] {
+                            if let Some(n_node) = self.nodes.get(&neighbor) {
+                                let d = self.distance(query, &n_node.vector, metric)?;
+                                if d < curr_dist {
+                                    curr_dist = d;
+                                    curr_obj = neighbor;
+                                    changed = true;
+                                }
                             }
                         }
                     }
                 }
             }
-            if !changed {
-                break;
-            }
             current_level -= 1;
         }
 
-        let W = self.search_layer(query, &[curr_obj], std::cmp::max(k, self.config.ef_search), 0, metric)?;
-        let mut results: Vec<(u64, f32)> = W.into_iter().take(k).map(|c| (c.id, c.distance)).collect();
+        let w = self.search_layer(query, &[curr_obj], std::cmp::max(k, self.config.ef_search), 0, metric)?;
+        let mut results: Vec<(u64, f32)> = w.into_iter().take(k).map(|c| (c.id, c.distance)).collect();
         results.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
         Ok(results)
     }
@@ -262,7 +273,7 @@ impl HnswGraph {
     fn search_layer(&self, query: &[f32], enter_points: &[u64], ef: usize, level: usize, metric: DistanceMetric) -> Result<Vec<Candidate>, VdbError> {
         let mut visited = HashSet::with_capacity(ef * 2);
         let mut v = BinaryHeap::with_capacity(ef);
-        let mut C = BinaryHeap::with_capacity(ef);
+        let mut c_list = Vec::with_capacity(ef + 1);
 
         for &ep in enter_points {
             visited.insert(ep);
@@ -270,15 +281,16 @@ impl HnswGraph {
                 let d = self.distance(query, &node.vector, metric)?;
                 let candidate = Candidate { id: ep, distance: d };
                 v.push(candidate.clone());
-                C.push(candidate);
+                c_list.push(candidate);
             }
         }
+        c_list.sort_by(|a, b| a.distance.total_cmp(&b.distance).then_with(|| a.id.cmp(&b.id)));
 
         while !v.is_empty() {
             let curr = v.pop().unwrap();
-            let farthest = C.peek().unwrap();
+            let farthest = c_list.last().unwrap();
 
-            if curr.distance > farthest.distance {
+            if curr.distance > farthest.distance && c_list.len() >= ef {
                 break;
             }
 
@@ -289,16 +301,14 @@ impl HnswGraph {
                             visited.insert(neighbor);
                             if let Some(n_node) = self.nodes.get(&neighbor) {
                                 let d = self.distance(query, &n_node.vector, metric)?;
-                                let farthest_c = C.peek().unwrap();
-                                if d < farthest_c.distance || C.len() < ef {
+                                let farthest_c = c_list.last().unwrap();
+                                if d < farthest_c.distance || c_list.len() < ef {
                                     let candidate = Candidate { id: neighbor, distance: d };
                                     v.push(candidate.clone());
-                                    C.push(candidate);
-                                    if C.len() > ef {
-                                        let mut vec_c: Vec<Candidate> = C.into_vec();
-                                        vec_c.sort_by(|a, b| b.distance.total_cmp(&a.distance).then_with(|| b.id.cmp(&a.id)));
-                                        vec_c.truncate(ef);
-                                        C = BinaryHeap::from(vec_c);
+                                    c_list.push(candidate);
+                                    c_list.sort_by(|a, b| a.distance.total_cmp(&b.distance).then_with(|| a.id.cmp(&b.id)));
+                                    if c_list.len() > ef {
+                                        c_list.truncate(ef);
                                     }
                                 }
                             }
@@ -308,9 +318,7 @@ impl HnswGraph {
             }
         }
 
-        let mut res: Vec<Candidate> = C.into_vec();
-        res.sort_by(|a, b| a.distance.total_cmp(&b.distance).then_with(|| a.id.cmp(&b.id)));
-        Ok(res)
+        Ok(c_list)
     }
 
     fn generate_random_level(&self) -> usize {
