@@ -22,3 +22,9 @@ bytemuck = { version = "1.14", features = ["derive"] }
 [dev-dependencies]
 criterion = "0.4"
 tempfile = "3.3"
+
+[[bench]]
+name = "vdb_bench"
+harness = false
+
+

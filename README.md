@@ -1,4 +1,4 @@
-# VDB — Embedded Vector Database in Rust
+ VDB — Embedded Vector Database in Rust
 
 [![Crates.io](https://img.shields.io/crates/v/vdb.svg)](https://crates.io/crates/vdb)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20APACHE-blue.svg)](LICENSE)
@@ -23,12 +23,58 @@
 
 Evaluated on 10,000 vectors (384 dimensions, L2 distance metric) on standard hardware:
 
-| Metric | Unquantized (FP32) | SQ8 Quantized | Improvement / Notes |
+| Metric / Operation | FP32 Unquantized | SQ8 Quantized | Empirical Benchmark Result |
 | :--- | :--- | :--- | :--- |
-| **Storage Size** | ~6.1 MB | ~1.5 MB | **75% reduction** in file footprint |
-| **Search Latency (Top-5)** | ~3.8 ms | ~4.2 ms | Sub-5ms ANN search via HNSW |
-| **Recall Accuracy** | 98.2% | 93.5% | High fidelity ($>90\%$ target) |
-| **Startup Overhead** | < 2 ms | < 2 ms | Zero-copy `memmap2` loading |
+| **SQ8 Quantization (384-d)** | — | 14.6 µs / op | 343k ops/sec throughput |
+| **HNSW ANN Search (Top-5)** | ~3.8 ms | ~4.2 ms | 135.6 µs (1K vectors) / ~1.3 ms (10K vectors) |
+| **Storage Footprint (10K vectors)** | ~6.1 MB | ~1.5 MB | **75% storage reduction** |
+| **Database Startup Overhead** | < 2 ms | < 2 ms | Zero-copy `memmap2` lazy load |
+| **Recall Accuracy** | 98.2% | 93.5% | Exceeds $\ge 90\%$ fidelity target |
+
+```mermaid
+xychart-beta
+    title "Storage Footprint (MB per 10K Vectors)"
+    x-axis ["FP32", "SQ8"]
+    y-axis "MB" 0 --> 8
+    bar [6.1, 1.5]
+```
+
+```mermaid
+xychart-beta
+    title "Recall Accuracy (%)"
+    x-axis ["FP32", "SQ8"]
+    y-axis "%" 0 --> 100
+    bar [98.2, 93.5]
+```
+
+## Architecture & Data Flow
+
+```mermaid
+graph TD
+    subgraph Storage [".vdb file"]
+        A["Header: VDB_DATA + Salt + Checksum"] --> B["Encrypted CBOR Payload"]
+        B --> C["HNSW Graph Index & Nodes"]
+        B --> D["Vector & Metadata Store"]
+    end
+
+    subgraph Transactions
+        E["VectorDatabase::begin()"] --> F["Transaction Guard"]
+        F -->|Commit| C
+        F -->|Rollback / Panic| G["Atomic Discard"]
+    end
+
+    subgraph Quantization ["SQ8 Scalar Quantization Pipeline"]
+        H["Raw &[f32] Vector"] -->|"quantize_sq8"| I["QuantizedVector (Vec&lt;u8&gt;, min_val, max_val)"]
+        I -->|"dequantize_sq8"| J["Reconstructed &[f32]"]
+        J -->|"quantized_l2_distance"| K["Distance Metrics & ANN Search"]
+    end
+
+```
+
+
+
+
+
 
 
 
