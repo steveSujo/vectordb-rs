@@ -1,9 +1,9 @@
- VDB — Embedded Vector Database in Rust 
+ # VDB — Embedded Vector Database in Rust 
 
 [![Crates.io](https://img.shields.io/crates/v/vdb.svg)](https://crates.io/crates/vdb)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20APACHE-blue.svg)](LICENSE)
 [![Tests](https://github.com/steveSujo/vectordb-rs/actions/workflows/test.yml/badge.svg)](https://github.com/steveSujo/vectordb-rs/actions/workflows/test.yml)
-
+	
 `vdb` is a lightweight, zero-dependency (pure Rust) embedded vector database designed for knowledge bases, semantic search, and local vector indexing. It provides fast approximate nearest neighbor (ANN) search via Hierarchical Navigable Small World (HNSW) graphs, scalar quantization (SQ8), cryptographic security (Argon2id + AES-256-GCM), and transaction safety.
 
 ---
