@@ -1,4 +1,4 @@
- VDB — Embedded Vector Database in Rust
+ VDB — Embedded Vector Database in Rust 
 
 [![Crates.io](https://img.shields.io/crates/v/vdb.svg)](https://crates.io/crates/vdb)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20APACHE-blue.svg)](LICENSE)
@@ -64,10 +64,11 @@ graph TD
     end
 
     subgraph Quantization ["SQ8 Scalar Quantization Pipeline"]
-        H["Raw &[f32] Vector"] -->|"quantize_sq8"| I["QuantizedVector (Vec&lt;u8&gt;, min_val, max_val)"]
-        I -->|"dequantize_sq8"| J["Reconstructed &[f32]"]
+        H["Raw f32 Vector Slice"] -->|"quantize_sq8"| I["QuantizedVector (u8 bytes, bounds)"]
+        I -->|"dequantize_sq8"| J["Reconstructed f32 Vector"]
         J -->|"quantized_l2_distance"| K["Distance Metrics & ANN Search"]
     end
+
 
 ```
 
